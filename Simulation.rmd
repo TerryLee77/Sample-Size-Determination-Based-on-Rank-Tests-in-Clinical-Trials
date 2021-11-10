@@ -1,0 +1,366 @@
+---
+title: "HW2021.10.26"
+author:
+  - 李俊逸 19336073
+documentclass: ctexart
+keywords:
+  - 中文
+  - R Markdown
+geometry: margin=2cm
+output:
+  rticles::ctex:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+---
+
+# Readme{-}
+
+下面代码均可直接运行
+```{r}
+rm(list = ls())
+```
+
+# Table 1 results reproduced{-}
+
+考虑观察变量$x_i,y_i$,记$z_i = y_i-x_1$考虑模型$z_i = \theta + e_i$
+考虑假设检验$H_0:\theta = 0$,$H_1:\theta \neq 0$,采用`Wilcoxon符号秩检验`
+
+考虑统计量
+$$T^{+}=\sum_{i=1}^{n} R_{i} \psi_{i}$$
+其中
+$\psi_{i}=\left\{\begin{array}{ll}
+1 & \text { if } z_{i}>0 \\
+0 & \text { if } z_{i}<0
+\end{array}\right.$
+在零假设的情况下辖有
+$$
+\begin{aligned}
+T^{*} &=\frac{T^{+}-E\left(T^{+}\right)}{\sqrt{\operatorname{var}\left(T^{+}\right)}} \\
+&=\frac{T^{+}-n(n+1) / 4}{\sqrt{n(n+1)(2 n+1) / 24}}
+\end{aligned}\rightarrow N(0,1)
+$$
+其中
+$$
+\begin{aligned}
+E\left(T^{+}\right)=& n p_{1}+n(n-1) p_{2} \\
+\operatorname{var}\left(T^{+}\right)=& n p_{1}\left(1-p_{1}\right)+n(n-1)\left(p_{1}^{2}-4 p_{1} p_{2}+3 p_{2}-2 p_{2}^{2}\right) \\
+&+n(n-1)(n-2)\left(p_{3}+4 p_{4}-4 p_{2}^{2}\right)
+\end{aligned}
+$$
+$$
+\begin{array}{l}
+p_{1}=P\left(z_{1}>0\right) \\
+p_{2}=P\left(z_{1} \geq\left|z_{2}\right|\right) \\
+p_{3}=P\left(z_{1} \geq\left|z_{2}\right|, z_{1} \geq\left|z_{3}\right|\right) \\
+p_{4}=P\left(z_{1} \geq z_{2} \geq\left|z_{3}\right|\right)
+\end{array}
+$$
+其中$p_{i}$ 可以估计为
+$$
+\begin{array}{l}
+\hat{p}_{1}=\frac{1}{n} \sum_{i=1}^{n} I\left\{z_{I}>0\right\} \\
+\hat{p}_{2}=\frac{1}{n(n-1)} \sum_{i \neq j} I\left\{z_{i} \geq\left|z_{j}\right|\right\} \\
+\hat{p}_{3}=\frac{1}{n(n-1)(n-2)} \sum_{i \neq j \neq k} I\left\{z_{i} \geq\left|z_{j}\right|, z_{i} \geq\left|z_{k}\right|\right\} \\
+\hat{p}_{4}=\frac{1}{n(n-1)(n-2)} \sum_{i \neq j \neq k} I\left\{z_{i} \geq z_{j} \geq\left|z_{k}\right|\right\}
+\end{array}
+$$
+
+原始法构造函数
+```{r tidy=TRUE}
+p_1 <- function(z){
+  n <- length(z)
+  p1 <- 1/n*sum(z>0)
+  return(p1)
+}
+
+p_2 <- function(z){
+  n <- length(z)
+  count <- 0
+  for (i in 1:n){
+    count <- sum(z[-i]>=abs(z[i])) + count ## i != j
+  }
+  return(count/(n*(n-1)))
+}
+
+
+## 貌似三重循环会比较慢，用空间换复杂度
+p_3 <- function(z){
+  library(foreach)
+  n <- length(z)
+  temp <- matrix(FALSE,n,n)
+  for (i in 1:n){
+    temp[i,] = (z >= abs(z[i])) ## 获取行i为 z >= abs(z[i])
+  }
+  count <- 0
+  pb<-txtProgressBar(style = 3)
+  t1<-Sys.time()
+  for (i in 1:n){
+    tempa <- temp[,i][-i] ## 获取列，只需计算任一不相等且同为T的值
+    for (j in 1:(n-1)){
+      if (tempa[j]==TRUE){
+         count <- sum(tempa[-j]==TRUE) +count ##计算了两次
+       }
+    }
+    setTxtProgressBar(pb,i/n)
+  }
+  print(Sys.time()-t1)
+  count <- count/2 # 计算了两次
+  p3 <- 1/(n*(n-1)*(n-2))*count
+  return(p3)
+}
+
+
+p_4 <- function(z){
+  n <- length(z)
+  #temp <- matrix(FALSE,n,n)
+  count <- 0
+  for (i in 1:n){
+    temp <- which(z >= abs(z[i])) ## 获取行k为 z >= abs(z[k])
+    for (j in temp[which(temp!=i)]){
+      if(i!=j){
+        count <- sum(z[c(-i,-j)]>=z[j]) +count #计算z_i>=z_j的数量
+      }
+    }
+  }
+  p4 <- 1/(n*(n-1)*(n-2))*count
+  return(p4)
+}
+```
+
+发现时间成本较大，重新构造函数
+```{r tidy=TRUE}
+p<- function(z){
+  n <- length(z)
+  p1 <- 1/n*sum(z>0) 
+  p2 <- 0
+  p3 <- 0
+  p4 <- 0
+  for (i in 1:n){
+    #p2 <- sum(z[-i]>=abs(z[i])) + p2 ## i != j 
+    temp <- sum(abs(z)<=z[i]) -1
+    p2 <- temp  +p2 
+    ## i!=j!=k 相当于从p2,i!=j且满足条件里面选两组同时为T的组合(因为不除去i，为了速度,故>1)
+    ## 此处判断不能少，因为choose(-1,2)=0
+    p3 <- 2*choose(temp,2)*(temp>1) +p3
+    ## p4同理
+    temp1 <- sum(z>=z[i]) -1
+    if(temp>0&temp1>0){
+      p4 <- temp1*temp + p4
+    }
+  }
+  p2 <- p2/(n*(n-1))
+  p3 <- p3/(n*(n-1)*(n-2))
+  p4 <- p4/(n*(n-1)*(n-2))
+  c(p1,p2,p3,p4)
+}
+```
+
+因为文章说明
+
+> A simulation study was conducted to evaluate the performance of the derived sample size of the formula in Eq. (2). The zis are generated from normal population with mean y and variance 1. The pis are estimated by Monte Carlo method based on a sample of size 10,000. The estimated values of pis are used to determine the sample size from the formula in Eq. (2). Then, using the calculated sample size, the true power is simulated based on 10,000 simulations. Table 1 ummarizes the results from the simulation. As can be seen from Table 1, the sample size needed to achieve the desired power is not too large, and the actual power for the calculated sample size is very close to the nominal power, which indicates that the sample size formula works very well.
+
+
+
+我们采用`Monte Carlo`方法，构造函数
+```{r tidy=TRUE}
+## 蒙特卡洛，设计多线程实验
+
+theta <- c(seq(.2,.49,0.01))
+table <- rep(0,9)
+names(table) <- c('theta','p1','p2','p3','p4','n0.8','true_power_0.8','n0.9','true_power_0.9')
+library(parallel)
+
+for (i in theta){ 
+  z <- rnorm(10000,mean = theta,sd = 1)
+  pt <- p(z)
+  p1 <- pt[1]
+  p2 <- pt[2]
+  p3 <- pt[3]
+  p4 <- pt[4]
+  ## power = 0.8的情况
+  tempn <- floor((qnorm(.975)/sqrt(12)+qnorm(.8)*sqrt(p3+4*p4-4*p2^2))^2/((1/4-p2)^2))+1
+  monte <- function(N){
+    n <- length(z)
+    tempz <- sample(z,size = tempn,replace = T)##有放回
+    t <- sum(rank((abs(tempz)))[which(tempz>0)])
+    t <- (t-tempn*(tempn+1)/4)/sqrt(tempn*(tempn+1)*(2*tempn+1)/24)
+    return(abs(t)>qnorm(.975))
+  }
+  cl<-makeCluster(16)
+  nsim <- 10000
+  clusterExport(cl, "z")
+  clusterExport(cl,"tempn")
+  clusterExport(cl, "p")
+  T1<-do.call(c,parLapply(cl, 1:nsim, monte))
+  stopCluster(cl)
+  true_power_8 <- sum(T1==TRUE)/nsim
+  n1 <- tempn
+  ## power  .9的情况,为了多线程传入参数方便重新构造
+  cl<-makeCluster(16)
+  tempn <- floor((qnorm(.975)/sqrt(12)+qnorm(.9)*sqrt(p3+4*p4-4*p2^2))^2/((1/4-p2)^2))+1
+  clusterExport(cl, "z")
+  clusterExport(cl,"tempn")
+  clusterExport(cl, "p")
+  T2<-do.call(c,parLapply(cl, 1:nsim, monte))
+  stopCluster(cl)
+  true_power_9 <- sum(T2==TRUE)/nsim
+  n2 <- tempn
+  out <- c(i,p1,p2,p3,p4,n1,true_power_8,n2,true_power_9)
+  table <- rbind(table,out)
+}
+table <- table[2:nrow(table),]
+```
+
+```{r tidy=TRUE}
+library(knitr)
+library(kableExtra)
+knitr::kable(table,format = "markdown")
+```
+
+# Table 3 results reproduced{-}
+
+```{r tidy=TRUE}
+rm(list = ls())
+```
+
+同理，考虑两组随机变量$x_i,i = 1 ,\cdots , n_1\ , y_j,j = 1 ,\cdots,n_2$
+考虑零假设$H_0:\theta = 0$,$H_1 : \theta \neq 0$,其中有$x_i = e_i ,i = 1 ,\cdots , n_1$,$y_j = e_{n_1+j}+\theta$
+考虑统计量$$
+W=\sum_{i=1}^{n_{2}} R_{i},
+$$
+在零假设情况下，当$n_1,n_2\rightarrow\infty$时候有\
+
+$$
+\begin{aligned}
+W^{*} &=\frac{W-E(W)}{\sqrt{\operatorname{var}(W)}} \\
+&=\frac{W-\frac{1}{2} n_{2}\left(n_{2}+n_{1}+1\right)}{\sqrt{\frac{1}{12} n_{1} n_{2}\left(n_{1}+n_{2}+1\right)}}
+\end{aligned} \rightarrow N(0,1)
+$$
+我们拒绝零假设当满足$|W^*|\geq z_{\alpha/2}$又
+
+$$
+\begin{aligned}
+W &=\sum_{i=1}^{n_{2}}\left(\sum_{j=1}^{n_{2}} I\left\{y_{i} \geq y_{j}\right\}+\sum_{j=1}^{n_{1}} I\left\{y_{i} \geq x_{j}\right\}\right) \\
+&=\frac{n_{2}\left(n_{2}+1\right)}{2}+\sum_{i=1}^{n_{2}} \sum_{j=1}^{n_{1}} I\left\{y_{i} \geq x_{j}\right\}
+\end{aligned}
+$$
+则
+$$
+E(W)=\frac{n_{1}\left(n_{1}-1\right)}{2}+n_{1} n_{2} p_{1}
+$$
+$$
+\operatorname{var}(W)=n_{1} n_{2} p_{1}\left(1-p_{1}\right)+n_{1} n_{2}\left(n_{1}-1\right)\left(p_{2}-p_{1}^{2}\right)+n_{1} n_{2}\left(n_{2}-1\right)\left(p_{3}-p_{1}^{2}\right)
+$$
+$$
+\begin{array}{l}
+p_{1}=P\left(y_{1} \geq x_{1}\right) \\
+p_{2}=P\left(y_{1} \geq x_{1} \text { and } y_{1} \geq x_{2}\right) \\
+p_{3}=P\left(y_{1} \geq x_{1} \text { and } y_{2} \geq x_{1}\right)
+\end{array}
+$$
+$$\hat{p}_{1}=\frac{1}{n_{1} n_{2}} \sum_{i=1}^{n_{2}} \sum_{j=1}^{n_{1}} I\left\{y_{i} \geq x_{j}\right\}$$
+$$\hat{p}_{2}=\frac{1}{n_{1} n_{2}\left(n_{1}-1\right)} \sum_{i=1}^{n_{2}} \sum_{j_{1} \neq j_{2}} I\left\{y_{i} \geq x_{j_{1}}\right. and \left.y_{i} \geq x_{j_{2}}\right\}$$
+
+
+$$\hat{p}_{3}=\frac{1}{n_{1} n_{2}\left(n_{2}-1\right)} \sum_{i_{1} \neq i_{2}} \sum_{j=1}^{n_{1}} I\left\{y_{i_{1}} \geq x_{i}\right. and \left.y_{i_{2}} \geq x_{j}\right\}$$
+
+构造函数有
+
+```{r tidy=TRUE}
+p <- function(x,y){
+  p1 <- 0
+  p2 <- 0
+  p3 <- 0
+  n1 <- length(x)
+  n2 <- length(y)
+  tempz <- outer(y,x,'-')
+  p1 <- sum(tempz >= 0 )/(n1*n2)
+  for (i in 1: n2){
+    p2 <- 2*choose(sum(tempz[i,]>=0),2) + p2
+  }
+  for (i in 1: n1){
+    p3 <- 2*choose(sum(tempz[,i]>=0),2) + p3
+  }
+  p2 <- p2/n1/n2/(n1-1)
+  p3 <- p3/n1/n2/(n2-1)
+  return(c(p1,p2,p3))
+}
+```
+
+当$n_1,n_2$较大时候有
+均值
+$$
+\mu w=\frac{n_{2}\left(n_{2}+1\right)}{2}+n_{1} n_{2} p_{1}
+$$
+方差
+$$
+\sigma_{W}^{2}=n_{1} n_{2} p_{1}\left(1-p_{1}\right)+n_{1} n_{2}\left(n_{1}-1\right)\left(p_{2}-p_{1}^{2}\right)+n_{1} n_{2}\left(n_{2}-1\right)\left(p_{3}-p_{1}^{2}\right)
+$$
+
+有
+$$\begin{aligned} 1-\beta=& P\left(\left|W^{*}\right|>z_{\alpha / 2}\right) \\ & \approx P\left(W^{*}>z_{\alpha / 2}\right) \\ &=P\left(\frac{W-n_{2}\left(n_{2}+1\right) / 2-n_{1} n_{2} p_{1}}{\sigma_{W}}\right.\\ &\left.>\frac{z_{\alpha / 2} \sqrt{n_{1} n_{2}\left(n_{1}+n_{2}+1\right) / 12}+n_{1} n_{2}\left(1 / 2-p_{1}\right)}{\sigma_{W}}\right) \\ &=P\left(N(0,1)>\frac{z_{\alpha / 2} \sqrt{\kappa(1+\kappa) / 12}+\sqrt{n_{2}} \kappa\left(1 / 2-p_{1}\right)}{\sqrt{\kappa^{2}\left(p_{2}-p_{1}^{2}\right)+\kappa\left(p_{3}-p_{1}^{2}\right)}}\right) \end{aligned}$$
+
+则可知若$n_{1}=\kappa n_{2} \quad$ 有 $$n_{2}=\frac{\left(z_{\alpha / 2} \sqrt{\kappa(\kappa+1) / 12}+z_{\beta} \sqrt{\kappa^{2}\left(p_{2}-p_{1}^{2}\right)+\kappa\left(p_{3}-p_{1}^{2}\right)}\right)^{2}}{\kappa^{2}\left(1 / 2-p_{1}\right)^{2}}$$
+
+又因为作者写道
+
+> A simulation study was conducted to evaluate the above formula for sample size
+calculation. The xis are generated from normal population with mean 0 and variance
+1, yis are generated from normal population with mean y and variance 1. The sample
+size ratio k is chosen to be 1. The pis are estimated by a Monte Carlo method based
+on a sample size of 10,000. The estimated values of pis are used to determined the
+sample size from the formula in Eq. (4). Using the calculated sample size, the true
+power is simulated based on 10,000 simulations. The results are given in Table 3.
+
+则
+```{r tidy = TRUE}
+theta <- c(seq(.22,.8,0.02))
+table <- rep(0,8)
+names(table) <- c('theta','p1','p2','p3','n0.8','true_power_0.8','n0.9','true_power_0.9')
+library(parallel)
+
+for (i in theta){
+  x <- rnorm(10000,mean = 0, sd = 1)
+  y <- rnorm(10000,mean = i ,sd  = 1)
+  pt_ <- p(x,y)
+  p1 <- pt_[1]
+  p2 <- pt_[2]
+  p3 <- pt_[3]
+  ## power = 0.8
+  tempn <- floor((qnorm(.975)*sqrt(2/12)+qnorm(.8)*sqrt((p2-p1^2))+(p3-p1^2))^2/(1/2-p1)^2)+1
+  n21 <- tempn
+  nsim <- 10000
+  monte <- function(N){
+    tempx <- sample(x,size = tempn,replace = T)
+    tempy <- sample(y,size = tempn,replace = T)
+    w <- sum(rank(c(tempx,tempy))[(tempn+1):(2*tempn)])
+    w <- (w-1/2*tempn*(2*tempn+1))/sqrt(1/12*tempn^2*(2*tempn+1))
+    return(abs(w)>=qnorm(.975))
+  }
+  cl<-makeCluster(16, type = "FORK")##因为是Linux可以直接共享数据
+  #clusterExport(cl, "x")
+  #clusterExport(cl, "y")
+  #clusterExport(cl,"tempn")
+  #clusterExport(cl, "p")
+  T1<-do.call(c,parLapply(cl, 1:nsim, monte))
+  stopCluster(cl)
+  true_power_8 <- sum(T1==TRUE)/nsim
+  ## power = 0.9
+  tempn <- floor((qnorm(.975)*sqrt(2/12)+qnorm(.9)*sqrt((p2-p1^2))+(p3-p1^2))^2/(1/2-p1)^2)+1
+  n22 <- tempn
+  cl<-makeCluster(16,type = "FORK")
+  T2<-do.call(c,parLapply(cl, 1:nsim, monte))
+  stopCluster(cl)
+  true_power_9 <- sum(T2==TRUE)/nsim
+  out <- c(i,p1,p2,p3,n21,true_power_8,n22,true_power_9)
+  table <- rbind(table,out)
+}
+table <- table[2:nrow(table),]
+```
+
+结果有
+```{r tidy=TRUE}
+knitr::kable(table,format = "markdown")
+```
